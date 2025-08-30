@@ -1,10 +1,10 @@
+// import dotenv from "dotenv";
+// dotenv.config();
+
 import express from "express";
-import dotenv from "dotenv";
 import cors from "cors";
 import connectDB from "./src/config/db.js";
 import imageRoutes from './src/routes/imageRoutes.js';
-
-dotenv.config();
 
 connectDB();
 

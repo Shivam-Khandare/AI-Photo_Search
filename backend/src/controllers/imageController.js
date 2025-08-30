@@ -1,8 +1,7 @@
-import axios from 'axios';
-import Image from '../models/Image.js';
+// src/controllers/imageController.js
 
-// The final, reliable Hugging Face CLIP model
-const MODEL_URL = 'https://api-inference.huggingface.co/models/sentence-transformers/clip-ViT-B-32';
+import Image from '../models/Image.js';
+import { getTextEmbedding, getImageEmbedding } from '../utils/googleAI.js';
 
 const indexImage = async (req, res) => {
   try {
@@ -13,30 +12,30 @@ const indexImage = async (req, res) => {
     if (!userId || !deviceImagePath) {
       return res.status(400).json({ message: 'User ID and device image path are required.' });
     }
-    const existingImage = await Image.findOne({ deviceImagePath });
+    const existingImage = await Image.findOne({ deviceImagePath, userId });
     if (existingImage) {
+      // Let's add a log here too, so we know when an image is skipped.
+      console.log(`[INFO] Image already indexed, skipping: ${deviceImagePath}`);
       return res.status(200).json({ message: 'Image already indexed.' });
     }
 
     const imageBuffer = req.file.buffer;
-    // This tells the API to wait for the model to load if it's "asleep"
-    const response = await axios.post(MODEL_URL, imageBuffer, {
-      headers: {
-        Authorization: `Bearer ${process.env.HF_API_KEY}`,
-        'Content-Type': req.file.mimetype,
-      },
-      // This is the crucial new option
-      params: {
-        wait_for_model: true
-      }
-    });
+    const embedding = await getImageEmbedding(imageBuffer);
+    
+    if (!embedding) {
+        return res.status(500).json({ message: 'Failed to generate image embedding.' });
+    }
 
-    const embedding = response.data;
     const newImage = new Image({ userId, deviceImagePath, embedding });
     await newImage.save();
+
+    // ADD THIS LOG FOR SUCCESSFUL INDEXING
+    console.log(`[SUCCESS] Indexed image: ${deviceImagePath}`);
+
     res.status(201).json({ message: 'Image indexed successfully.' });
+
   } catch (error) {
-    console.error('--- INDEXING ERROR ---', error.response ? error.response.data : error.message);
+    console.error('--- INDEXING ERROR ---', error.message);
     res.status(500).json({ message: 'Server error during image indexing.' });
   }
 };
@@ -48,21 +47,11 @@ const searchImages = async (req, res) => {
       return res.status(400).json({ message: 'Search prompt is required.' });
     }
 
-    const response = await axios.post(
-      MODEL_URL,
-      { inputs: prompt },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.HF_API_KEY}`,
-        },
-        // This is the crucial new option
-        params: {
-          wait_for_model: true
-        }
-      }
-    );
-    
-    const queryEmbedding = response.data;
+    const queryEmbedding = await getTextEmbedding(prompt);
+
+    // console.log("--- COPY THE VECTOR BELOW FOR ATLAS DEBUGGING ---");
+    // console.log(JSON.stringify(queryEmbedding));
+
     if (!queryEmbedding) {
         return res.status(500).json({ message: 'Failed to get embedding for prompt.' });
     }
@@ -84,11 +73,20 @@ const searchImages = async (req, res) => {
           score: { $meta: 'vectorSearchScore' },
         },
       },
+      {
+        $match: {
+          score: { $gte: 0.52 } // Only return results with a score of 75% or higher
+        }
+      }
     ]);
+
+    // ADD THIS LOG FOR SUCCESSFUL SEARCHES
+    console.log(`[SUCCESS] Searched for prompt: "${prompt}"`);
+    console.log('[RESULTS WITH SCORES]:', results);
 
     res.status(200).json(results);
   } catch (error) {
-    console.error('--- SEARCH ERROR ---', error.response ? error.response.data : error.message);
+    console.error('--- SEARCH ERROR ---', error.message);
     res.status(500).json({ message: 'Server error during search.' });
   }
 };
